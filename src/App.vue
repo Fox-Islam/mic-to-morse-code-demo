@@ -6,11 +6,12 @@
           <v-col>
             <v-slider
               max="0"
-              min="-40"
+              min="-50"
               step="0.1"
               vertical
               label="Threshold"
               v-model="threshold"
+              v-on:change="onThresholdChange"
             ></v-slider>
           </v-col>
           <v-col align-self="center">
@@ -22,10 +23,10 @@
         </v-row>
 
         <v-row>
-          <v-btn elevation="2" v-on:click="startMicrophone"
+          <v-btn elevation="2" v-on:click="startMicrophoneButtonPress"
             >Start Microphone</v-btn
           >
-          <v-btn elevation="2" v-on:click="stopMicrophone"
+          <v-btn elevation="2" v-on:click="stopMicrophoneButtonPress"
             >Stop Microphone</v-btn
           >
         </v-row>
@@ -38,7 +39,9 @@
         </v-row>
 
         <v-row>
-          <v-btn elevation="2" v-on:click="clearSentence">Clear Sentence</v-btn>
+          <v-btn elevation="2" v-on:click="clearSentenceButtonPress"
+            >Clear Sentence</v-btn
+          >
         </v-row>
 
         <v-row>
@@ -64,64 +67,65 @@
 </template>
 
 <script>
-import * as Tone from "tone";
+import MicToMorseCode from "mic-to-morse-code";
 
 export default {
   name: "App",
 
   data: () => ({
-    threshold: -40,
+    threshold: -50,
     activeColor: "white",
     morseString: "",
     hangulSentence: "",
   }),
 
   methods: {
-    startMicrophone: function () {
-      if (Tone.Transport.state !== "started") {
-        Tone.start();
-      }
-
-      const meter = new Tone.Meter();
-      microphoneSource = new Tone.UserMedia().connect(meter);
-      microphoneSource
-        .open()
-        .then(() => {
-          playTone();
-          listenInterval = setInterval(onMicTime(this, meter), 100);
-        })
-        .catch((e) => {
-          console.log(e);
-        });
+    startMicrophoneButtonPress: function () {
+      micToMorseCode.startMicrophone();
     },
-    stopMicrophone: function () {
-      clearInterval(listenInterval);
-      microphoneSource.close();
-      this.activeColor = "white";
+    stopMicrophoneButtonPress: function () {
+      micToMorseCode.stopMicrophone();
     },
-    clearSentence: function () {
-      morseSentence = "";
+    clearSentenceButtonPress: function () {
+      micToMorseCode.clearSentence();
+    },
+    onThresholdChange: function (value) {
+      micToMorseCode.setThreshold(value);
     },
   },
+
+  mounted: function () {
+    createReferenceToVueInstance(this);
+  },
 };
+const eventToColorMap = {
+  "not-listening": "white",
+  "listening:no-sound": "yellow",
+  "listening:sound": "red",
+  "dot:length": "blue",
+  "dash:length": "green",
+  "character:delimiter:length": "grey",
+  "word:delimiter:length": "white",
+};
+let vue = null;
 
-const debounceTime = 0.25;
-const dotTime = 0.5;
-const dashTime = 1.5;
-const letterTime = 1.5;
-const spaceTime = 2.5;
-const letterDelimiter = " ";
-const spaceDelimiter = "/";
+function createReferenceToVueInstance(vueInstance) {
+  vue = vueInstance;
+}
 
-let listenInterval = null;
-let soundStartTime = 0;
-let soundStopTime = 0;
-let morseSentence = "";
-let microphoneSource = null;
-let lastState = 0;
+const micToMorseCode = new MicToMorseCode(-50, 50, 0.2);
 
-function getHangulSentence() {
-  return morseSentence
+micToMorseCode.createListener("on:change", function (morseSentence) {
+  vue.morseString = morseSentence;
+  vue.hangulSentence = getHangulSentence(vue.morseString);
+});
+
+micToMorseCode.createListener("on:audio:state:change", function (audioState) {
+  vue.activeColor = eventToColorMap[audioState];
+});
+
+function getHangulSentence(string) {
+  return string
     .split("/")
     .map((morseWord) => {
       return morseWord
@@ -139,104 +143,6 @@ function convertMorseCodeToHangul(characterInMorseCode) {
    * convert!
    */
   return characterInMorseCode;
-}
-
-function getMorseString() {
-  return morseSentence;
-}
-
-function playTone() {
-  const synth = new Tone.Synth().toDestination();
-  synth.triggerAttackRelease("C4", "8n");
-}
-
-function onMicTime(self, meter) {
-  return function () {
-    const currentTime = meter.now();
-    if (meter.getValue() > self.threshold) {
-      logStartTime(self, currentTime);
-      return;
-    }
-    logEndTime(self, currentTime);
-    self.hangulSentence = getHangulSentence();
-    self.morseString = getMorseString();
-  };
-}
-
-function logStartTime(self, currentTime) {
-  if (currentTime - soundStopTime < debounceTime) {
-    return;
-  }
-  if (wasOn()) {
-    const onTime = currentTime - soundStartTime;
-    if (onTime > dashTime) {
-      self.activeColor = "green";
-      return;
-    }
-    if (onTime > dotTime) {
-      self.activeColor = "blue";
-      return;
-    }
-    return;
-  }
-  self.activeColor = "red";
-  lastState = 1;
-  soundStartTime = currentTime;
-}
-
-function wasOn() {
-  return lastState === 1;
-}
-
-function logEndTime(self, currentTime) {
-  if (currentTime - soundStartTime < debounceTime) {
-    return;
-  }
-  const offTime = currentTime - soundStopTime;
-  if (wasOff() && offTime > spaceTime) {
-    self.activeColor = "white";
-    if (morseSentence.length === 0) {
-      return;
-    }
-    if (morseSentence[morseSentence.length - 1] === spaceDelimiter) {
-      return;
-    }
-    addCharacter(spaceDelimiter);
-    return;
-  }
-  if (wasOff() && offTime > letterTime) {
-    self.activeColor = "grey";
-    if (morseSentence.length === 0) {
-      return;
-    }
-    if (morseSentence[morseSentence.length - 1] === " ") {
-      return;
-    }
-    addCharacter(letterDelimiter);
-    return;
-  }
-
-  if (wasOn()) {
-    soundStopTime = currentTime;
-    lastState = 0;
-    const onTime = currentTime - soundStartTime;
-    if (onTime > dashTime) {
-      addCharacter("-");
-      return;
-    }
-    if (onTime > dotTime) {
-      addCharacter(".");
-      return;
-    }
-  }
-}
-
-function wasOff() {
-  return lastState === 0;
-}
-
-function addCharacter(character) {
-  morseSentence = morseSentence + character;
 }
 </script>
 
